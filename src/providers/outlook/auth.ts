@@ -1,16 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import os from 'node:os';
+import { isDeepStrictEqual } from 'node:util';
+import { acquireCacheLock } from '../../auth/cache-lock.js';
+import { getDataDir } from '../../config.js';
 import {
   PublicClientApplication,
   CryptoProvider,
-  type AccountInfo,
-  type AuthenticationResult,
-  type ICachePlugin,
-  type TokenCacheContext,
 } from '@azure/msal-node';
-import { decryptWithMachineKey, encryptWithMachineKey } from '../../auth/credential-store.js';
+import type { AccountInfo, AuthenticationResult, ICachePlugin, TokenCacheContext } from '@azure/msal-node';
+import { decryptWithMachineKey, encryptWithMachineKey, writePrivateFile } from '../../auth/credential-store.js';
 
 export interface OutlookAuthResult {
   accessToken: string;
@@ -22,10 +21,10 @@ export interface OutlookAuthResult {
 }
 
 /** Default directory for the MSAL token cache */
-const DEFAULT_CACHE_DIR = path.join(os.homedir(), '.email-mcp');
+const DEFAULT_CACHE_DIR = getDataDir();
 /**
  * The MSAL token cache (it holds the Outlook refresh token), encrypted with the
- * same AES-256-GCM scheme and machine-derived key as credentials.enc.
+ * same AES-256-GCM scheme and independent secret as credentials.enc.
  */
 export const DEFAULT_CACHE_FILE = path.join(DEFAULT_CACHE_DIR, 'msal-cache.enc');
 /** Where versions before the encrypted cache kept it, as plain JSON. */
@@ -42,7 +41,7 @@ export class MsalCacheDecryptError extends Error {
     super(
       `The Outlook token cache ${cacheFilePath} could not be decrypted: it was modified, ` +
         'is corrupt, or was written with a different key (EMAIL_MCP_KEY or another machine). ' +
-        'Delete that file and re-run email-mcp-setup to sign in to Outlook again.',
+        'Check EMAIL_MCP_KEY and preserve a private backup; if necessary re-run email-mcp-setup in a fresh EMAIL_MCP_DATA_DIR.',
     );
     this.name = 'MsalCacheDecryptError';
   }
@@ -53,36 +52,25 @@ function writeEncryptedCache(cacheFilePath: string, serialized: string): void {
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
-  // Write to a sibling temp file and rename, so a crash mid-write can never
-  // leave a truncated cache behind (which would read as tampered).
-  const tmpPath = `${cacheFilePath}.${process.pid}.tmp`;
-  fs.writeFileSync(tmpPath, encryptWithMachineKey(serialized), { mode: 0o600 });
-  fs.chmodSync(tmpPath, 0o600);
-  fs.renameSync(tmpPath, cacheFilePath);
+  writePrivateFile(cacheFilePath, encryptWithMachineKey(serialized));
 }
 
-/**
- * Returns the serialized MSAL cache, or null when there is none yet.
- *
- * Migrates a plaintext cache written by an older version: its content is
- * written back encrypted and the plaintext file is removed, so the user stays
- * signed in across the upgrade. A plaintext file older than the encrypted one
- * is a stale leftover and is removed without being read.
- */
-function loadSerializedCache(cacheFilePath: string, legacyPlaintextPath: string): string | null {
+/** Import legacy plaintext only with explicit operator consent and no encrypted cache. */
+function loadSerializedCache(cacheFilePath: string, legacyPlaintextPath: string): {
+  serialized: string;
+  finishMigration?: () => void;
+} | null {
   const hasEncrypted = fs.existsSync(cacheFilePath);
-
-  if (fs.existsSync(legacyPlaintextPath)) {
-    const plaintextIsNewer =
-      !hasEncrypted ||
-      fs.statSync(legacyPlaintextPath).mtimeMs > fs.statSync(cacheFilePath).mtimeMs;
-    if (plaintextIsNewer) {
-      const serialized = fs.readFileSync(legacyPlaintextPath, 'utf-8');
+  if (!hasEncrypted && fs.existsSync(legacyPlaintextPath)) {
+    if (process.env.EMAIL_MCP_MIGRATE_LEGACY !== 'true') {
+      throw new Error('Legacy Outlook plaintext cache found. Set EMAIL_MCP_MIGRATE_LEGACY=true for a one-time trusted migration.');
+    }
+    const serialized = fs.readFileSync(legacyPlaintextPath, 'utf-8');
+    JSON.parse(serialized);
+    return { serialized, finishMigration: () => {
       writeEncryptedCache(cacheFilePath, serialized);
       fs.unlinkSync(legacyPlaintextPath);
-      return serialized;
-    }
-    fs.unlinkSync(legacyPlaintextPath);
+    } };
   }
 
   if (!hasEncrypted) return null;
@@ -95,14 +83,21 @@ function loadSerializedCache(cacheFilePath: string, legacyPlaintextPath: string)
   } catch {
     throw new MsalCacheDecryptError(cacheFilePath);
   }
-  if (usedLegacyKey) {
-    try {
-      writeEncryptedCache(cacheFilePath, plaintext);
-    } catch {
-      // Re-keying is best-effort; the read itself already succeeded.
+  const removePlaintext = process.env.EMAIL_MCP_MIGRATE_LEGACY === 'true' && fs.existsSync(legacyPlaintextPath);
+  if (removePlaintext) {
+    const legacy = fs.readFileSync(legacyPlaintextPath, 'utf-8');
+    if (!isDeepStrictEqual(JSON.parse(plaintext), JSON.parse(legacy))) {
+      throw new Error(
+        'Outlook cache migration conflict: encrypted and plaintext caches differ. Both files were preserved. ' +
+        'Stop all email-mcp and setup processes and back up both files privately before choosing a cache or reauthenticating. ' +
+        'Do not merge caches automatically: this can restore removed accounts.',
+      );
     }
   }
-  return plaintext;
+  return { serialized: plaintext, finishMigration: () => {
+    if (usedLegacyKey) writeEncryptedCache(cacheFilePath, plaintext);
+    if (removePlaintext) fs.unlinkSync(legacyPlaintextPath);
+  } };
 }
 
 /**
@@ -117,46 +112,61 @@ export function createEncryptedFileCachePlugin(
   // MSAL calls afterCacheAccess from a finally block even when
   // beforeCacheAccess threw. If the cache could not be read, the in-memory
   // cache is empty, and writing it would silently replace the user's cache.
-  let loadFailed = false;
+  const transactions = new WeakMap<TokenCacheContext, () => void>();
 
   return {
     async beforeCacheAccess(context: TokenCacheContext): Promise<void> {
-      loadFailed = false;
+      const release = await acquireCacheLock(cacheFilePath);
       try {
-        const serialized = loadSerializedCache(cacheFilePath, legacyPlaintextPath);
-        if (serialized !== null) {
-          context.tokenCache.deserialize(serialized);
+        const loaded = loadSerializedCache(cacheFilePath, legacyPlaintextPath);
+        if (loaded !== null) {
+          context.tokenCache.deserialize(loaded.serialized);
+          loaded.finishMigration?.();
         }
+        transactions.set(context, release);
       } catch (err) {
-        loadFailed = true;
+        release();
         throw err;
       }
     },
     async afterCacheAccess(context: TokenCacheContext): Promise<void> {
-      if (loadFailed || !context.cacheHasChanged) return;
-      writeEncryptedCache(cacheFilePath, context.tokenCache.serialize());
+      const release = transactions.get(context);
+      if (!release) return;
+      transactions.delete(context);
+      try {
+        if (context.cacheHasChanged) writeEncryptedCache(cacheFilePath, context.tokenCache.serialize());
+      } finally {
+        release();
+      }
     },
   };
 }
 
 export class OutlookAuth {
   static readonly AUTHORITY = 'https://login.microsoftonline.com/consumers';
-  // MailboxSettings.ReadWrite is required for the messageRules API (block
-  // rules) — confirmed by Microsoft's own docs to be supported for personal
-  // Microsoft accounts (not just work/school), not just Mail.ReadWrite/Send.
-  static readonly SCOPES = ['Mail.ReadWrite', 'Mail.Send', 'MailboxSettings.ReadWrite', 'offline_access'];
+  static get SCOPES(): string[] {
+    switch (process.env.EMAIL_MCP_OUTLOOK_SCOPE ?? 'readonly') {
+      case 'readonly': return ['Mail.Read', 'offline_access'];
+      case 'read-send': return ['Mail.Read', 'Mail.Send', 'offline_access'];
+      case 'read-write': return ['Mail.ReadWrite', 'Mail.Send', 'offline_access'];
+      case 'full': return ['Mail.ReadWrite', 'Mail.Send', 'MailboxSettings.ReadWrite', 'offline_access'];
+      default: throw new Error('EMAIL_MCP_OUTLOOK_SCOPE must be readonly, read-send, read-write, or full');
+    }
+  }
 
+  private readonly scopes: string[];
   private pca: InstanceType<typeof PublicClientApplication>;
   private cryptoProvider: InstanceType<typeof CryptoProvider>;
 
   constructor(clientId: string, cacheFilePath?: string) {
+    this.scopes = OutlookAuth.SCOPES;
     this.pca = new PublicClientApplication({
       auth: {
         clientId,
         authority: OutlookAuth.AUTHORITY,
       },
       cache: {
-        cachePlugin: createEncryptedFileCachePlugin(cacheFilePath ?? DEFAULT_CACHE_FILE),
+        cachePlugin: createEncryptedFileCachePlugin(cacheFilePath ?? path.join(getDataDir(), 'msal-cache.enc')),
       },
     });
     this.cryptoProvider = new CryptoProvider();
@@ -168,7 +178,7 @@ export class OutlookAuth {
     const state = crypto.randomBytes(16).toString('base64url');
 
     const url = await this.pca.getAuthCodeUrl({
-      scopes: OutlookAuth.SCOPES,
+      scopes: this.scopes,
       redirectUri,
       codeChallenge: challenge,
       codeChallengeMethod: 'S256',
@@ -186,7 +196,7 @@ export class OutlookAuth {
     const result: AuthenticationResult = await this.pca.acquireTokenByCode({
       code,
       codeVerifier,
-      scopes: OutlookAuth.SCOPES,
+      scopes: this.scopes,
       redirectUri,
     });
 
@@ -215,7 +225,7 @@ export class OutlookAuth {
 
     const result = await this.pca.acquireTokenSilent({
       account,
-      scopes: OutlookAuth.SCOPES,
+      scopes: this.scopes,
     });
 
     return {
@@ -254,7 +264,7 @@ export class OutlookAuth {
   async refreshToken(refreshToken: string): Promise<OutlookAuthResult> {
     const result = await this.pca.acquireTokenByRefreshToken({
       refreshToken,
-      scopes: OutlookAuth.SCOPES,
+      scopes: this.scopes,
     });
 
     if (!result) {

@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
 import { exec } from 'node:child_process';
 import { askText, askValidated, askConfirm, askChoice, askPassword, closePrompts } from './prompts.js';
-import { CredentialStore } from '../auth/credential-store.js';
+import { CredentialStore, requireEncryptionKey } from '../auth/credential-store.js';
 import { OAuthCallbackServer } from '../auth/oauth-server.js';
-import { GmailAuth, type GmailScopeMode } from '../providers/gmail/auth.js';
+import type { GmailScopeMode } from '../providers/gmail/auth.js';
+import { GmailAuth } from '../providers/gmail/auth.js';
 import { OutlookAuth } from '../providers/outlook/auth.js';
 import type { AccountCredentials, ProviderTypeValue } from '../models/types.js';
 import { ProviderType } from '../models/types.js';
@@ -89,11 +90,13 @@ async function setupGmail(scopeModeFlag?: GmailScopeMode): Promise<void> {
   }
   console.log('A browser window will open for Google authorization.\n');
 
-  let scopeMode = scopeModeFlag;
+  let scopeMode = scopeModeFlag ?? (process.env.EMAIL_MCP_GMAIL_SCOPE as GmailScopeMode | undefined);
   if (!scopeMode) {
     scopeMode = await askChoice<GmailScopeMode>('Gmail permission scope:', [
+      { name: 'Read only (default)', value: 'readonly' },
+      { name: 'Read and send', value: 'read-send' },
       {
-        name: 'Full (default) — includes permanent delete, bypassing Trash',
+        name: 'Full — includes permanent delete, bypassing Trash',
         value: 'full',
       },
       {
@@ -338,6 +341,7 @@ async function removeAccount(id: string): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function main(): Promise<void> {
+  requireEncryptionKey();
   const args = process.argv.slice(2);
 
   // Handle --list
@@ -358,15 +362,15 @@ async function main(): Promise<void> {
     return;
   }
 
-  // Handle --scope <full|restricted>, applied to Gmail setup without prompting
+  // Handle --scope <readonly|read-send|restricted|full>, applied to Gmail setup without prompting
   const scopeIdx = args.indexOf('--scope');
   let scopeModeFlag: GmailScopeMode | undefined;
   if (scopeIdx !== -1) {
     const value = args[scopeIdx + 1];
-    if (value === 'full' || value === 'restricted') {
+    if (value === 'readonly' || value === 'read-send' || value === 'full' || value === 'restricted') {
       scopeModeFlag = value;
     } else {
-      console.error('Usage: --scope <full|restricted>');
+      console.error('Usage: --scope <readonly|read-send|restricted|full>');
       process.exit(1);
     }
   }

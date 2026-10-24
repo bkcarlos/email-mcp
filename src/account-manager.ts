@@ -48,16 +48,23 @@ const MICROSOFT_CONSENT_URL = 'https://account.live.com/consent/Manage';
 
 export class AccountManager {
   private store: CredentialStore;
+  private readonly allowedIds: Set<string> | undefined;
   private providers: Map<string, EmailProvider> = new Map();
   private credentials: Map<string, AccountCredentials> = new Map();
 
   constructor(store?: CredentialStore) {
     this.store = store ?? new CredentialStore();
+    const configured = process.env.EMAIL_MCP_ACCOUNT_IDS;
+    this.allowedIds = configured === undefined ? undefined : new Set(configured.split(',').map((id) => id.trim()).filter(Boolean));
+  }
+
+  private assertAllowed(accountId: string): void {
+    if (this.allowedIds && !this.allowedIds.has(accountId)) throw new Error('Account access denied');
   }
 
   async listAccounts(): Promise<Account[]> {
     const creds = await this.store.list();
-    return creds.map((c) => ({
+    return creds.filter((c) => !this.allowedIds || this.allowedIds.has(c.id)).map((c) => ({
       id: c.id,
       name: c.name,
       provider: c.provider,
@@ -68,11 +75,13 @@ export class AccountManager {
 
   /** The account's own address, or undefined for an unknown account id. */
   async getAccountEmail(accountId: string): Promise<string | undefined> {
+    this.assertAllowed(accountId);
     const creds = this.credentials.get(accountId) ?? (await this.store.get(accountId));
     return creds?.email;
   }
 
   async getProvider(accountId: string): Promise<EmailProvider> {
+    this.assertAllowed(accountId);
     const existing = this.providers.get(accountId);
     if (existing) {
       // Check if OAuth token has expired mid-session — reconnect if so
@@ -99,6 +108,7 @@ export class AccountManager {
   }
 
   async connectAccount(accountId: string): Promise<void> {
+    this.assertAllowed(accountId);
     const creds = await this.store.get(accountId);
     if (!creds) throw new Error(`Account ${accountId} not found`);
 
@@ -114,6 +124,7 @@ export class AccountManager {
   }
 
   async addAccount(creds: AccountCredentials): Promise<void> {
+    this.assertAllowed(creds.id);
     await this.store.save(creds);
     await this.connectAccount(creds.id);
   }
@@ -124,6 +135,7 @@ export class AccountManager {
    * the network; a failed provider step is reported in the result, not thrown.
    */
   async removeAccount(accountId: string): Promise<AccountRemovalResult> {
+    this.assertAllowed(accountId);
     const creds = await this.store.get(accountId);
     if (!creds) throw new Error(`Account ${accountId} not found`);
 
@@ -185,6 +197,7 @@ export class AccountManager {
   }
 
   async disconnectAccount(accountId: string): Promise<void> {
+    this.assertAllowed(accountId);
     const provider = this.providers.get(accountId);
     if (provider) {
       try {
