@@ -8,6 +8,7 @@ function jsonResult(data: unknown) {
   return { content: [{ type: 'text' as const, text: JSON.stringify(data) }] };
 }
 
+/** Register enabled mailbox organization tools, keeping all mutation capabilities opt-in by default. */
 export function registerOrganizingTools(server: McpServer, accountManager: AccountManager): void {
   // --- email_move ---
   if (isToolEnabled('email_move')) server.tool(

@@ -24,11 +24,13 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+/** Start an authenticated loopback listener on a free port and register it for cleanup. */
 async function listen(factory?: typeof createServer) {
   const listener = await startHttpServer(readHttpConfig({ EMAIL_MCP_HTTP_TOKEN: TOKEN, EMAIL_MCP_HTTP_PORT: '0' }), factory);
   listeners.push(listener);
   return listener;
 }
+/** Connect a test MCP client with the fixture Bearer token and verify stateless transport. */
 async function connect(url: string) {
   const client = new Client({ name: 'http-test', version: '1' });
   clients.push(client);
@@ -37,6 +39,7 @@ async function connect(url: string) {
   expect(transport.sessionId).toBeUndefined();
   return client;
 }
+/** Send a JSON-RPC POST using fixture headers, allowing individual tests to override them. */
 function post(url: string, body: unknown = initialize, extraHeaders: Record<string, string> = {}) {
   return fetch(url, { method: 'POST', headers: { ...headers, ...extraHeaders }, body: JSON.stringify(body) });
 }
@@ -167,6 +170,7 @@ describe('authenticated Streamable HTTP', () => {
     let bothStarted!: () => void;
     const started = new Promise<void>((resolve) => { bothStarted = resolve; });
     const disconnects: Array<ReturnType<typeof vi.fn>> = [];
+    /** Create an isolated fake account manager whose requests can be released independently. */
     const factory = async () => {
       const disconnectAll = vi.fn().mockResolvedValue(undefined);
       disconnects.push(disconnectAll);
@@ -183,6 +187,7 @@ describe('authenticated Streamable HTTP', () => {
       return createServer(manager);
     };
     const { url } = await listen(factory);
+    /** Issue account tests with the same JSON-RPC ID to exercise request isolation. */
     const request = (accountId: string) => post(url, { jsonrpc: '2.0', id: 7, method: 'tools/call', params: { name: 'email_test_account', arguments: { accountId } } });
     const first = request('first');
     const second = request('second');
@@ -210,6 +215,7 @@ describe('authenticated Streamable HTTP', () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const capacity = new Promise<void>((resolve) => { atCapacity = resolve; });
     let active = 0;
+    /** Create a fake manager that holds work until the concurrency-limit assertion finishes. */
     const factory = async () => createServer({
       disconnectAll: vi.fn().mockResolvedValue(undefined),
       testAccount: async () => {

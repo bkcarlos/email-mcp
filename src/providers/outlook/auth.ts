@@ -37,6 +37,7 @@ const LEGACY_PLAINTEXT_CACHE_NAME = 'msal-cache.json';
  * crash, and the unreadable file is left untouched for the user to inspect.
  */
 export class MsalCacheDecryptError extends Error {
+  /** Describe an unreadable cache without including its contents or the encryption secret. */
   constructor(cacheFilePath: string) {
     super(
       `The Outlook token cache ${cacheFilePath} could not be decrypted: it was modified, ` +
@@ -47,6 +48,7 @@ export class MsalCacheDecryptError extends Error {
   }
 }
 
+/** Encrypt serialized MSAL state and atomically replace the private cache file. */
 function writeEncryptedCache(cacheFilePath: string, serialized: string): void {
   const dir = path.dirname(cacheFilePath);
   if (!fs.existsSync(dir)) {
@@ -115,6 +117,7 @@ export function createEncryptedFileCachePlugin(
   const transactions = new WeakMap<TokenCacheContext, () => void>();
 
   return {
+    /** Acquire the transaction lock, load authenticated state, and complete migration only after deserialization. */
     async beforeCacheAccess(context: TokenCacheContext): Promise<void> {
       const release = await acquireCacheLock(cacheFilePath);
       try {
@@ -129,6 +132,7 @@ export function createEncryptedFileCachePlugin(
         throw err;
       }
     },
+    /** Persist changed state only for a successfully loaded transaction, releasing its lock even when writing fails. */
     async afterCacheAccess(context: TokenCacheContext): Promise<void> {
       const release = transactions.get(context);
       if (!release) return;
@@ -144,6 +148,7 @@ export function createEncryptedFileCachePlugin(
 
 export class OutlookAuth {
   static readonly AUTHORITY = 'https://login.microsoftonline.com/consumers';
+  /** Return the configured Graph permissions with offline access, rejecting unknown scope modes. */
   static get SCOPES(): string[] {
     switch (process.env.EMAIL_MCP_OUTLOOK_SCOPE ?? 'readonly') {
       case 'readonly': return ['Mail.Read', 'offline_access'];
@@ -158,6 +163,7 @@ export class OutlookAuth {
   private pca: InstanceType<typeof PublicClientApplication>;
   private cryptoProvider: InstanceType<typeof CryptoProvider>;
 
+  /** Capture OAuth scopes and configure MSAL with the encrypted cache for the selected data directory. */
   constructor(clientId: string, cacheFilePath?: string) {
     this.scopes = OutlookAuth.SCOPES;
     this.pca = new PublicClientApplication({
@@ -172,6 +178,7 @@ export class OutlookAuth {
     this.cryptoProvider = new CryptoProvider();
   }
 
+  /** Create the authorization URL with PKCE and a random state that the callback must verify. */
   async getAuthUrl(redirectUri: string): Promise<{ url: string; codeVerifier: string; state: string }> {
     const { verifier, challenge } = await this.cryptoProvider.generatePkceCodes();
     // CSRF binding, verified by OAuthCallbackServer.waitForCode(state).
@@ -188,6 +195,7 @@ export class OutlookAuth {
     return { url, codeVerifier: verifier, state };
   }
 
+  /** Exchange an authorization code with its PKCE verifier and return tokens plus the cached account identity. */
   async exchangeCode(
     code: string,
     codeVerifier: string,

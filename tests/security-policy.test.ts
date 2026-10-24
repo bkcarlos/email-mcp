@@ -10,6 +10,7 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
+/** Connect an in-memory MCP client to a fake provider and register both endpoints for cleanup. */
 async function connect() {
   const sendEmail = vi.fn().mockResolvedValue({ id: 'sent-test' });
   const getProvider = vi.fn().mockResolvedValue({ sendEmail });

@@ -66,6 +66,7 @@ describe('Outlook cache process coordination', () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  /** Fork the bundled cache worker with IPC and track it for termination during test cleanup. */
   function worker(file = cachePath) {
     const child = fork(path.join(workerDir, 'worker.cjs'), [file], { stdio: ['ignore', 'ignore', 'pipe', 'ipc'] });
     children.push(child);

@@ -17,6 +17,7 @@ const ICLOUD_DEFAULTS = {
   smtpPort: 587,
 };
 
+/** Register only enabled account tools; AccountManager enforces account access for their operations. */
 export function registerAccountTools(server: McpServer, accountManager: AccountManager): void {
   // --- email_list_accounts ---
   if (isToolEnabled('email_list_accounts')) server.tool(

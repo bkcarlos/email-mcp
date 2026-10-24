@@ -52,16 +52,19 @@ export class AccountManager {
   private providers: Map<string, EmailProvider> = new Map();
   private credentials: Map<string, AccountCredentials> = new Map();
 
+  /** Capture the process account allowlist and use the supplied or default credential store. */
   constructor(store?: CredentialStore) {
     this.store = store ?? new CredentialStore();
     const configured = process.env.EMAIL_MCP_ACCOUNT_IDS;
     this.allowedIds = configured === undefined ? undefined : new Set(configured.split(',').map((id) => id.trim()).filter(Boolean));
   }
 
+  /** Reject disallowed IDs before reading credentials, reusing a connection, or changing account state. */
   private assertAllowed(accountId: string): void {
     if (this.allowedIds && !this.allowedIds.has(accountId)) throw new Error('Account access denied');
   }
 
+  /** Return permitted account metadata and connection state without exposing stored credentials. */
   async listAccounts(): Promise<Account[]> {
     const creds = await this.store.list();
     return creds.filter((c) => !this.allowedIds || this.allowedIds.has(c.id)).map((c) => ({
@@ -80,6 +83,7 @@ export class AccountManager {
     return creds?.email;
   }
 
+  /** Return an authorized provider, connecting lazily and refreshing expired OAuth credentials. */
   async getProvider(accountId: string): Promise<EmailProvider> {
     this.assertAllowed(accountId);
     const existing = this.providers.get(accountId);
@@ -107,6 +111,7 @@ export class AccountManager {
     return provider;
   }
 
+  /** Load an allowed account and establish its provider connection with refreshed credentials. */
   async connectAccount(accountId: string): Promise<void> {
     this.assertAllowed(accountId);
     const creds = await this.store.get(accountId);
@@ -123,6 +128,7 @@ export class AccountManager {
     this.credentials.set(accountId, creds);
   }
 
+  /** Persist an allowed account, then connect it; connection failure leaves the saved configuration intact. */
   async addAccount(creds: AccountCredentials): Promise<void> {
     this.assertAllowed(creds.id);
     await this.store.save(creds);
@@ -196,6 +202,7 @@ export class AccountManager {
     }
   }
 
+  /** Disconnect an allowed account and clear its cached provider and credentials even if disconnect fails. */
   async disconnectAccount(accountId: string): Promise<void> {
     this.assertAllowed(accountId);
     const provider = this.providers.get(accountId);

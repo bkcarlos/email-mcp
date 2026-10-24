@@ -31,6 +31,7 @@ const GMAIL_SCOPES: Record<GmailScopeMode, string[]> = {
   ],
 };
 
+/** Resolve explicit or environment Gmail permissions, defaulting to read-only and rejecting unknown modes. */
 function resolveScopeMode(explicit?: GmailScopeMode): GmailScopeMode {
   const mode = explicit ?? process.env.EMAIL_MCP_GMAIL_SCOPE?.toLowerCase() ?? 'readonly';
   if (mode !== 'readonly' && mode !== 'read-send' && mode !== 'restricted' && mode !== 'full') {

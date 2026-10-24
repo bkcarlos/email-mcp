@@ -11,6 +11,7 @@ function jsonResult(data: unknown) {
 const BLOCK_RULE_MATCH_TYPES = ['senderDomain', 'senderAddress', 'subjectContains', 'headerContains'] as const;
 const BLOCK_RULE_ACTIONS = ['delete', 'moveToJunk'] as const;
 
+/** Register enabled spam and block-rule tools with provider capability and argument validation. */
 export function registerModerationTools(server: McpServer, accountManager: AccountManager): void {
   // --- email_report_spam ---
   if (isToolEnabled('email_report_spam')) server.tool(

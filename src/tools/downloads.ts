@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { writePrivateFile } from '../auth/credential-store.js';
 
+/** Create or validate a real download directory, rejecting links and unsafe POSIX ownership or permissions. */
 function ensureDirectory(dir: string): void {
   try {
     fs.mkdirSync(dir, { mode: 0o700 });

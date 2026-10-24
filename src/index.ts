@@ -3,6 +3,7 @@ import { startServer } from './server.js';
 import { startHttpServer } from './http-server.js';
 import { getTransport } from './config.js';
 
+/** Require encryption configuration, then start setup or the selected MCP transport. */
 async function main(): Promise<void> {
   requireEncryptionKey();
   const args = process.argv.slice(2);
@@ -18,6 +19,7 @@ async function main(): Promise<void> {
     const listener = await startHttpServer();
     console.error(`Email MCP listening at ${listener.url}`);
     let stopping = false;
+    /** Drain HTTP work once on termination and force exit if shutdown exceeds ten seconds. */
     const shutdown = () => {
       if (stopping) return;
       stopping = true;

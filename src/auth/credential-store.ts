@@ -71,6 +71,7 @@ export function requireEncryptionKey(): string {
   return key;
 }
 
+/** Return the required secret seed first, adding machine-derived seeds only for explicit legacy migration. */
 function getSeedCandidates(): string[] {
   const seeds = [`email-mcp:env:${requireEncryptionKey()}`];
   // Only an operator can opt into importing credentials encrypted by old versions.
@@ -178,6 +179,7 @@ interface StoredData {
 export class CredentialStore {
   private filePath: string;
 
+  /** Select the credential directory and create it with owner-only permissions when absent. */
   constructor(dir?: string) {
     const baseDir = dir ?? getDataDir();
     if (!fs.existsSync(baseDir)) {
@@ -186,6 +188,7 @@ export class CredentialStore {
     this.filePath = path.join(baseDir, 'credentials.enc');
   }
 
+  /** Decrypt stored accounts and migrate an accepted legacy key; return an empty store only when no file exists. */
   private read(): StoredData {
     if (!fs.existsSync(this.filePath)) {
       return { accounts: {} };
@@ -198,6 +201,7 @@ export class CredentialStore {
     return data;
   }
 
+  /** Encrypt the complete account store with the independent secret and replace the file atomically. */
   private write(data: StoredData): void {
     const json = JSON.stringify(data);
     const encrypted = encryptWithMachineKey(json);

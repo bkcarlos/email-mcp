@@ -13,6 +13,7 @@ function jsonResult(data: unknown) {
 
 // Tool-supplied paths are untrusted. The lexical check rejects traversal;
 // saveDownload checks filesystem links after fetching the attachment.
+/** Resolve the configured downloads directory or the downloads subdirectory of the private data directory. */
 function getDownloadsBaseDir(): string {
   return path.resolve(
     process.env.EMAIL_MCP_DOWNLOADS_DIR || path.join(getDataDir(), 'downloads'),
@@ -38,6 +39,7 @@ function stripBodies(emails: Email[]): Email[] {
   }));
 }
 
+/** Register enabled read tools and the opt-in attachment saver with account checks and bounded download paths. */
 export function registerReadingTools(server: McpServer, accountManager: AccountManager): void {
   // --- email_list_folders ---
   if (isToolEnabled('email_list_folders')) server.tool(

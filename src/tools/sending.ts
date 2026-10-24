@@ -57,6 +57,7 @@ function withoutDuplicates(to: Contact[], cc: Contact[] | undefined): { to: Cont
   return { to: to.filter(firstMention), cc: cc?.filter(firstMention) };
 }
 
+/** Register enabled send and draft tools with recipient, attachment, and reply-thread validation. */
 export function registerSendingTools(server: McpServer, accountManager: AccountManager): void {
   // --- email_send ---
   if (isToolEnabled('email_send')) server.tool(

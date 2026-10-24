@@ -18,6 +18,7 @@ export interface HttpConfig {
   allowedHosts?: string[];
 }
 
+/** Validate HTTP configuration, requiring a separate Bearer secret and explicit hosts for non-loopback binding. */
 export function readHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig {
   const token = env.EMAIL_MCP_HTTP_TOKEN ?? '';
   if (!/^[A-Za-z0-9_-]{32,256}$/.test(token) || token === env.EMAIL_MCP_KEY) {
@@ -42,9 +43,11 @@ export function readHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig
 }
 
 class RequestError extends Error {
+  /** Carry a safe HTTP status and JSON-RPC error code for request failures returned to the client. */
   constructor(readonly status: number, message: string, readonly rpcCode = -32000) { super(message); }
 }
 
+/** Send a JSON-RPC error only while the response is writable and headers have not been sent. */
 function reply(res: ServerResponse, status: number, message: string, code = -32000): void {
   if (res.headersSent || res.destroyed) return;
   res.writeHead(status, { 'Content-Type': 'application/json' });
@@ -58,6 +61,7 @@ function readJson(req: IncomingMessage): Promise<unknown> {
     let size = 0;
     let settled = false;
     const timer = setTimeout(() => finish(new RequestError(408, 'Request body timed out')), BODY_TIMEOUT_MS);
+    /** Settle body parsing once, clear the timeout and listeners, and drain rejected input. */
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -71,13 +75,17 @@ function readJson(req: IncomingMessage): Promise<unknown> {
         catch { reject(new RequestError(400, 'Invalid JSON', -32700)); }
       }
     };
+    /** Accumulate request bytes until the body limit is reached, then reject and drain the upload. */
     const onData = (chunk: Buffer) => {
       size += chunk.length;
       if (size > MAX_HTTP_BODY_BYTES) finish(new RequestError(413, 'Request body exceeds 1 MiB'));
       else chunks.push(chunk);
     };
+    /** Complete JSON parsing after the request body ends. */
     const onEnd = () => finish();
+    /** Reject an upload that the client aborted. */
     const onAborted = () => finish(new RequestError(400, 'Request aborted'));
+    /** Convert a request stream error to a safe client-facing error. */
     const onError = () => finish(new RequestError(400, 'Request failed'));
     req.on('data', onData);
     req.once('end', onEnd);
@@ -97,6 +105,7 @@ export async function startHttpServer(
   const pending = new Set<Promise<void>>();
   let closing = false;
 
+  /** Authenticate and bound each POST before creating isolated MCP connections and cleaning them up. */
   const handle = async (req: IncomingMessage, res: ServerResponse): Promise<void> => {
     res.setHeader('Cache-Control', 'no-store');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -174,6 +183,7 @@ export async function startHttpServer(
   return {
     url: `http://${host}:${address.port}/mcp`,
     server: listener,
+    /** Stop accepting connections and await pending work, returning the same promise on repeated calls. */
     close(): Promise<void> {
       if (!shutdown) {
         closing = true;

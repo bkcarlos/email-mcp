@@ -83,6 +83,7 @@ async function resolveAccountIdentity(
 // Gmail Setup
 // ---------------------------------------------------------------------------
 
+/** Authorize Gmail with the selected permission mode, verify the connection, and store the account securely. */
 async function setupGmail(scopeModeFlag?: GmailScopeMode): Promise<void> {
   console.log('\n--- Gmail Setup ---');
   if (process.env.EMAIL_MCP_GMAIL_CLIENT_ID) {
@@ -340,6 +341,7 @@ async function removeAccount(id: string): Promise<void> {
 // Main
 // ---------------------------------------------------------------------------
 
+/** Validate the encryption key and setup options, then dispatch account management or interactive authorization. */
 async function main(): Promise<void> {
   requireEncryptionKey();
   const args = process.argv.slice(2);

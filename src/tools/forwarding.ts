@@ -42,6 +42,7 @@ function withScopeHint(error: any): string {
   return message;
 }
 
+/** Register enabled forwarding-rule tools while preserving recipient allowlist checks for rule creation. */
 export function registerForwardingTools(server: McpServer, accountManager: AccountManager): void {
   // --- email_create_forward_rule ---
   if (isToolEnabled('email_create_forward_rule')) server.tool(
