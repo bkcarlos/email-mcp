@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-10-25
+
+First independent fork release, based on upstream 1.10.1. Existing installations must follow SECURITY.md before upgrading: the encryption key is now mandatory and write tools are disabled by default.
+
+### Added
+- Authenticated Streamable HTTP transport alongside stdio.
+- Process account and tool allowlists, with a configurable private data directory.
+
+### Changed
+- Require an independent encryption secret and explicit consent for legacy migration.
+- Default Gmail and Outlook permissions and exposed tools to read-only access.
+- Require Node.js 22 or newer for this fork's supported runtime.
+- Include the security and migration guide in the published package.
+
+### Fixed
+- Serialize Outlook token-cache transactions across processes and preserve conflicting migration inputs.
+- Reject attachment download links and unsafe directories before atomic file replacement.
+
 ## [1.10.1] - 2026-10-04
 
 Drafts keep their attachments. A patch release: one fix, no tool or input changed.

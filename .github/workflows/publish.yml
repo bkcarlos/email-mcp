@@ -20,6 +20,19 @@ jobs:
           node-version: '22'
           registry-url: 'https://registry.npmjs.org'
       - run: npm install -g npm@latest # Trusted Publishing needs npm CLI >= 11.5.1
+      - name: Validate fork package and release tag
+        run: |
+          node --input-type=module <<'JS'
+          import fs from 'node:fs';
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          if (pkg.name === '@marlinjai/email-mcp') throw new Error('Configure the independent npm package before publishing');
+          if (process.env.GITHUB_REF_TYPE === 'tag' && process.env.GITHUB_REF_NAME !== `v${pkg.version}`) {
+            throw new Error('Release tag must match package.json version');
+          }
+          JS
       - run: npm ci
+      - run: npm run typecheck
       - run: npm test
+      - run: npm run build
+      - run: npm pack --dry-run
       - run: npm publish --access public

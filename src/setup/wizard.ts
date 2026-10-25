@@ -378,7 +378,7 @@ async function main(): Promise<void> {
   }
 
   // Interactive wizard
-  console.log('@marlinjai/email-mcp Account Setup\n');
+  console.log('@bkcarlos/email-mcp Account Setup\n');
 
   let addMore = true;
   while (addMore) {

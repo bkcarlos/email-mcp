@@ -1,8 +1,8 @@
 {
-  "name": "@marlinjai/email-mcp",
-  "version": "1.10.1",
-  "mcpName": "io.github.marlinjai/email-mcp",
-  "description": "Unified MCP server for email access across Gmail, Outlook, iCloud, and IMAP — search, send, organize, and batch-manage emails from any AI assistant",
+  "name": "@bkcarlos/email-mcp",
+  "version": "1.11.0",
+  "mcpName": "io.github.bkcarlos/email-mcp",
+  "description": "Unified MCP server for email access across Gmail, Outlook, iCloud, and IMAP \u2014 search, send, organize, and batch-manage emails from any AI assistant",
   "type": "module",
   "main": "dist/index.js",
   "bin": {
@@ -12,6 +12,8 @@
   "files": [
     "dist",
     "README.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "scripts": {
@@ -41,16 +43,16 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/marlinjai/email-mcp.git"
+    "url": "git+https://github.com/bkcarlos/email-mcp.git"
   },
-  "homepage": "https://github.com/marlinjai/email-mcp#readme",
+  "homepage": "https://github.com/bkcarlos/email-mcp#readme",
   "bugs": {
-    "url": "https://github.com/marlinjai/email-mcp/issues"
+    "url": "https://github.com/bkcarlos/email-mcp/issues"
   },
   "author": "marlinjai",
   "license": "MIT",
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "dependencies": {
     "@azure/msal-node": "^5.0.4",
@@ -71,5 +73,9 @@
     "esbuild": "^0.27.3",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org"
   }
 }

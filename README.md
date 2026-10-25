@@ -1,6 +1,6 @@
-# @marlinjai/email-mcp
+# @bkcarlos/email-mcp
 
-<p align="center"><img src="assets/icon-512.png" width="120" height="120" alt="email-mcp logo"></p>
+Independent fork of [marlinjai/email-mcp](https://github.com/marlinjai/email-mcp), distributed under the original MIT license. This package includes authenticated HTTP transport and additional security controls.
 
 A unified MCP server for email access across Gmail, Outlook, iCloud, and generic IMAP providers.
 
@@ -16,7 +16,9 @@ A unified MCP server for email access across Gmail, Outlook, iCloud, and generic
 
 ## Installation
 
-This checkout includes local security changes that are not published to npm. Build and run this checkout to use them; `npx @marlinjai/email-mcp` runs the upstream package instead.
+Requires Node.js 22 or newer. Install this fork with `npm install -g @bkcarlos/email-mcp@1.11.0`, or use the pinned `npx` commands below. The upstream package is a separate release.
+
+To build from source:
 
 ```bash
 npm ci --ignore-scripts
@@ -26,15 +28,15 @@ npm run build
 ## Quick Start
 
 1. Generate a random key once (for example, `openssl rand -hex 32`), store it in your password manager, and supply the same `EMAIL_MCP_KEY` to setup and the MCP process through a trusted environment or secret manager. Do not regenerate it on every startup or commit it to a config file. A missing or shorter-than-32-character key is rejected.
-2. Run `node dist/setup/wizard.js` to authorize an account. Gmail and Outlook default to read-only permissions.
-3. Configure your MCP host to launch the local build, inheriting the key:
+2. Run `npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup` to authorize an account. Gmail and Outlook default to read-only permissions.
+3. Configure your MCP host to launch this package, inheriting the key:
 
 ```json
 {
   "mcpServers": {
     "email": {
-      "command": "node",
-      "args": ["/absolute/path/to/email-mcp/dist/index.js"],
+      "command": "npx",
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"],
       "env": {
         "EMAIL_MCP_ACCOUNT_IDS": "<account-id-from-setup>"
       }
@@ -50,7 +52,7 @@ If your desktop host does not inherit shell environment variables, inject the ke
 Keep the same `EMAIL_MCP_KEY`, data directory, account allowlist and tool allowlist used by stdio. Supply a **separate** random `EMAIL_MCP_HTTP_TOKEN` (32–256 URL-safe characters) through your private environment/secret manager, then start:
 
 ```bash
-node dist/index.js --transport http
+npx --yes @bkcarlos/email-mcp@1.11.0 --transport http
 ```
 
 The endpoint is `http://127.0.0.1:3000/mcp`. You can also set `EMAIL_MCP_TRANSPORT=http`; `--transport stdio` explicitly selects the original transport. HTTP startup never opens the setup wizard; authorize accounts locally beforehand.
@@ -90,7 +92,7 @@ This uses [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-1
 After configuring the encryption key, the setup wizard uses the built-in OAuth client (PKCE):
 
 ```bash
-node dist/setup/wizard.js
+npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 # Select "Gmail" when prompted
 # Choose "Read only" (default), or explicitly authorize additional capabilities
 # A browser window opens for Google authorization
@@ -117,7 +119,7 @@ Pass `--scope readonly|read-send|restricted|full` to skip the prompt, or set `EM
 After configuring the encryption key, the setup wizard uses the built-in OAuth client (PKCE):
 
 ```bash
-node dist/setup/wizard.js
+npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 # Select "Outlook" when prompted
 # A browser window opens for Microsoft authorization
 # Sign in and grant the requested permissions
@@ -132,7 +134,7 @@ node dist/setup/wizard.js
 3. Run the setup wizard:
 
 ```bash
-node dist/setup/wizard.js
+npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 # Select "iCloud" when prompted
 # Enter your iCloud email address
 # Enter the app-specific password you generated
@@ -143,7 +145,7 @@ node dist/setup/wizard.js
 Run the setup wizard with your IMAP/SMTP server details:
 
 ```bash
-node dist/setup/wizard.js
+npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 # Select "Other IMAP" when prompted
 # Enter your IMAP host, port, and credentials
 # Optionally enter SMTP host and port for sending
@@ -186,7 +188,7 @@ Replies stay in their thread: `email_reply` sends inside the original conversati
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["@marlinjai/email-mcp"],
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"],
       "env": { "EMAIL_MCP_ATTACHMENTS_DIR": "~/Documents/email-outbox" }
     }
   }
@@ -257,7 +259,7 @@ Gmail and Outlook only. iCloud and generic IMAP have no server-side rule mechani
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["@marlinjai/email-mcp"],
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"],
       "env": { "EMAIL_MCP_FORWARD_ALLOWLIST": "expenses@example.com" }
     }
   }
@@ -275,7 +277,7 @@ Add the following to your `.mcp.json` file (project-level or global `~/.claude/.
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["@marlinjai/email-mcp"]
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"]
     }
   }
 }
@@ -322,10 +324,7 @@ See [SECURITY.md](SECURITY.md) for migration, tool and account allowlists, OAuth
 
 ## Support
 
-email-mcp is free and has no paid tier. Its one fixed cost is the independent security assessment Google requires every year for the shared Gmail sign-in (CASA, Cloud Application Security Assessment): 675 US dollars a year. It is the last open step before Google lets everyone use the one-command Gmail setup. Donations are collected until 2 November 2026, the day the assessment has to start, and the maintainer pays what is missing then. Progress is shown at [email.lumitra.co](https://email.lumitra.co/#fund-the-audit).
-
-- [GitHub Sponsors](https://github.com/sponsors/marlinjai)
-- [Buy Me a Coffee](https://buymeacoffee.com/marlinjai)
+Report fork-specific issues in [this repository](https://github.com/bkcarlos/email-mcp/issues). The original project and its shared OAuth application are maintained independently. Preserve the original copyright and license when redistributing.
 
 ## License
 
