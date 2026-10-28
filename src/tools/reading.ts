@@ -65,7 +65,7 @@ export function registerReadingTools(server: McpServer, accountManager: AccountM
     'Search emails with filters. By default returns compact results without full body content to save context. Set returnBody=true to include full email bodies.',
     {
       accountId: z.string(),
-      folder: z.string().optional(),
+      folder: z.string().optional().describe('Folder ID or name. Outlook also accepts a full path from email_list_folders (for example 银行/招商银行); omit to search the whole mailbox. A specified Outlook folder searches that folder only, not its descendants.'),
       from: z.string().optional(),
       to: z.string().optional(),
       subject: z.string().optional(),

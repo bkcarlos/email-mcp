@@ -1,6 +1,6 @@
 {
   "name": "@bkcarlos/email-mcp",
-  "version": "1.11.0",
+  "version": "1.11.1",
   "mcpName": "io.github.bkcarlos/email-mcp",
   "description": "Unified MCP server for email access across Gmail, Outlook, iCloud, and IMAP \u2014 search, send, organize, and batch-manage emails from any AI assistant",
   "type": "module",

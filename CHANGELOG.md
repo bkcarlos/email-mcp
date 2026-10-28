@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.11.1] - 2026-10-28
+
+### Fixed
+- List every page and nesting level of Outlook mail folders. Resolve searches by full folder path or unique name, and reject ambiguous names instead of selecting the wrong folder.
+- Fix Outlook search requests that combined keyword search with unsupported filtering, sorting or offset parameters. Apply structured criteria before local keyword pagination and follow Graph continuation links.
+- Put received-date predicates first in sorted Outlook filters, normalize date-only inputs to UTC timestamps, and escape apostrophes in address filters.
+- Report Graph's 1,000-candidate keyword search cap when it prevents completing a page instead of silently returning incomplete history.
+
 ## [1.11.0] - 2026-10-25
 
 First independent fork release, based on upstream 1.10.1. Existing installations must follow SECURITY.md before upgrading: the encryption key is now mandatory and write tools are disabled by default.

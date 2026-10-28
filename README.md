@@ -16,7 +16,7 @@ A unified MCP server for email access across Gmail, Outlook, iCloud, and generic
 
 ## Installation
 
-Requires Node.js 22 or newer. Install this fork with `npm install -g @bkcarlos/email-mcp@1.11.0`, or use the pinned `npx` commands below. The upstream package is a separate release.
+Requires Node.js 22 or newer. Install this fork with `npm install -g @bkcarlos/email-mcp@1.11.1`, or use the pinned `npx` commands below. The upstream package is a separate release.
 
 To build from source:
 
@@ -28,7 +28,7 @@ npm run build
 ## Quick Start
 
 1. Generate a random key once (for example, `openssl rand -hex 32`), store it in your password manager, and supply the same `EMAIL_MCP_KEY` to setup and the MCP process through a trusted environment or secret manager. Do not regenerate it on every startup or commit it to a config file. A missing or shorter-than-32-character key is rejected.
-2. Run `npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup` to authorize an account. Gmail and Outlook default to read-only permissions.
+2. Run `npx --yes --package=@bkcarlos/email-mcp@1.11.1 email-mcp-setup` to authorize an account. Gmail and Outlook default to read-only permissions.
 3. Configure your MCP host to launch this package, inheriting the key:
 
 ```json
@@ -36,7 +36,7 @@ npm run build
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"],
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.1"],
       "env": {
         "EMAIL_MCP_ACCOUNT_IDS": "<account-id-from-setup>"
       }
@@ -52,7 +52,7 @@ If your desktop host does not inherit shell environment variables, inject the ke
 Keep the same `EMAIL_MCP_KEY`, data directory, account allowlist and tool allowlist used by stdio. Supply a **separate** random `EMAIL_MCP_HTTP_TOKEN` (32–256 URL-safe characters) through your private environment/secret manager, then start:
 
 ```bash
-npx --yes @bkcarlos/email-mcp@1.11.0 --transport http
+npx --yes @bkcarlos/email-mcp@1.11.1 --transport http
 ```
 
 The endpoint is `http://127.0.0.1:3000/mcp`. You can also set `EMAIL_MCP_TRANSPORT=http`; `--transport stdio` explicitly selects the original transport. HTTP startup never opens the setup wizard; authorize accounts locally beforehand.
@@ -92,7 +92,7 @@ This uses [Streamable HTTP](https://modelcontextprotocol.io/specification/2025-1
 After configuring the encryption key, the setup wizard uses the built-in OAuth client (PKCE):
 
 ```bash
-npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
+npx --yes --package=@bkcarlos/email-mcp@1.11.1 email-mcp-setup
 # Select "Gmail" when prompted
 # Choose "Read only" (default), or explicitly authorize additional capabilities
 # A browser window opens for Google authorization
@@ -119,7 +119,7 @@ Pass `--scope readonly|read-send|restricted|full` to skip the prompt, or set `EM
 After configuring the encryption key, the setup wizard uses the built-in OAuth client (PKCE):
 
 ```bash
-npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
+npx --yes --package=@bkcarlos/email-mcp@1.11.1 email-mcp-setup
 # Select "Outlook" when prompted
 # A browser window opens for Microsoft authorization
 # Sign in and grant the requested permissions
@@ -134,7 +134,7 @@ npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 3. Run the setup wizard:
 
 ```bash
-npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
+npx --yes --package=@bkcarlos/email-mcp@1.11.1 email-mcp-setup
 # Select "iCloud" when prompted
 # Enter your iCloud email address
 # Enter the app-specific password you generated
@@ -145,7 +145,7 @@ npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 Run the setup wizard with your IMAP/SMTP server details:
 
 ```bash
-npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
+npx --yes --package=@bkcarlos/email-mcp@1.11.1 email-mcp-setup
 # Select "Other IMAP" when prompted
 # Enter your IMAP host, port, and credentials
 # Optionally enter SMTP host and port for sending
@@ -173,6 +173,10 @@ npx --yes --package=@bkcarlos/email-mcp@1.11.0 email-mcp-setup
 | `email_get_attachment` | Download a specific attachment by ID (returns base64 data). `sourceFolder` names the folder on iCloud/IMAP when the message is not in INBOX |
 | `email_save_attachment` | Download an attachment directly to disk, returning metadata only, which avoids the token cost of round-tripping large files as base64. `outputPath` is relative to a fixed downloads directory (`~/.email-mcp/downloads`, override with `EMAIL_MCP_DOWNLOADS_DIR`) and cannot escape it. `sourceFolder` as on `email_get_attachment` |
 
+Outlook search accepts `since` (inclusive) and `before` (exclusive) as `YYYY-MM-DD` (midnight UTC) or ISO 8601 timestamps with a timezone. Without `subject`/`body`, results are ordered by received time, newest first. Keyword searches use Graph's native sent-time ordering; other filters and `offset` are applied to matching results across pages. Graph limits keyword searches to 1,000 candidates. If that cap prevents completing a page, the tool returns an explicit error: narrow the keywords/folder, or omit `subject`/`body` and use sender/date filters to retrieve older mail. A short keyword result must not be assumed to cover all mailbox history when this error occurs.
+
+`email_list_folders` follows every Outlook root/child page and returns a flat list with full `path` values such as `银行/招商银行`. Use a folder ID, full path, or unique display name in `email_search.folder`. Duplicate names require a path or ID. A specified folder searches only its own messages; omit `folder` to search the whole mailbox, including subfolders.
+
 ### Sending & Drafts (6)
 
 `email_send`, `email_reply`, `email_forward`, `email_draft_create` and `email_draft_update` take an optional `attachments` list. Each entry is either `{ path }` (a file in the attachments folder, see below) or `{ content, filename }` (base64), with an optional `contentType` (inferred from the extension otherwise). The total is capped at 25 MB; Outlook accepts up to 3 MB per message through this server. On `email_draft_update` a list replaces the draft's files, an empty list removes them, and no list keeps the files the draft has.
@@ -188,7 +192,7 @@ Replies stay in their thread: `email_reply` sends inside the original conversati
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"],
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.1"],
       "env": { "EMAIL_MCP_ATTACHMENTS_DIR": "~/Documents/email-outbox" }
     }
   }
@@ -259,7 +263,7 @@ Gmail and Outlook only. iCloud and generic IMAP have no server-side rule mechani
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"],
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.1"],
       "env": { "EMAIL_MCP_FORWARD_ALLOWLIST": "expenses@example.com" }
     }
   }
@@ -277,7 +281,7 @@ Add the following to your `.mcp.json` file (project-level or global `~/.claude/.
   "mcpServers": {
     "email": {
       "command": "npx",
-      "args": ["--yes", "@bkcarlos/email-mcp@1.11.0"]
+      "args": ["--yes", "@bkcarlos/email-mcp@1.11.1"]
     }
   }
 }

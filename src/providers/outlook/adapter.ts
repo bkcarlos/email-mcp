@@ -15,7 +15,7 @@ import type {
   ForwardRule,
 } from '../../models/types.js';
 import { ProviderType } from '../../models/types.js';
-import { mapGraphFolder, mapGraphMessage, mapGraphAttachment, buildGraphFilter, resolveWellKnownFolder } from './mapper.js';
+import { mapGraphFolder, mapGraphMessage, mapGraphAttachment, buildGraphFilter, resolveWellKnownFolder, normalizeGraphSearchQuery, matchesGraphSearchFilters } from './mapper.js';
 
 const toGraphAttachment = (att: { filename: string; contentType: string; content: Buffer }) => ({
   '@odata.type': '#microsoft.graph.fileAttachment',
@@ -65,7 +65,7 @@ export class OutlookAdapter implements EmailProvider {
   private client: ReturnType<typeof Client.init> | null = null;
   private accountId: string = '';
   private accessToken: string = '';
-  private folderIdCache: Map<string, string> = new Map();
+  private folderCache: Folder[] = [];
 
   async connect(credentials: AccountCredentials): Promise<void> {
     if (!credentials.oauth) {
@@ -73,6 +73,7 @@ export class OutlookAdapter implements EmailProvider {
     }
     this.accountId = credentials.id;
     this.accessToken = credentials.oauth.access_token;
+    this.folderCache = [];
 
     const client = Client.init({
       authProvider: (done) => {
@@ -96,6 +97,7 @@ export class OutlookAdapter implements EmailProvider {
   async disconnect(): Promise<void> {
     this.client = null;
     this.accessToken = '';
+    this.folderCache = [];
   }
 
   async testConnection(): Promise<{ success: boolean; folderCount: number; error?: string }> {
@@ -114,40 +116,66 @@ export class OutlookAdapter implements EmailProvider {
 
   /**
    * Resolves a folder name/display name/ID to a valid Graph API folder reference.
-   * Handles well-known names, localized display names, and raw folder IDs.
+   * Handles well-known names, unique display names, full paths, and raw IDs.
    */
   async resolveFolder(nameOrId: string): Promise<string> {
     // Check well-known name mappings (handles localized display names)
     const wellKnown = resolveWellKnownFolder(nameOrId);
     if (wellKnown) return wellKnown;
 
-    // Check cache
-    const cached = this.folderIdCache.get(nameOrId.toLowerCase());
+    const cached = this.findFolderId(nameOrId);
     if (cached) return cached;
 
-    // Looks like a raw folder ID (long base64 string) — use as-is
-    if (nameOrId.length > 40) return nameOrId;
+    // Refresh the complete tree on a miss, including newly created folders.
+    // A long display name or path is not necessarily a Graph ID.
+    await this.listFolders();
+    return this.findFolderId(nameOrId) ?? nameOrId;
+  }
 
-    // Fall back to listing folders and matching by display name
-    const client = this.ensureClient();
-    const response = await client.api('/me/mailFolders').get();
-    const folders = response.value || [];
-    for (const folder of folders) {
-      // Cache all folders while we're at it
-      this.folderIdCache.set(folder.displayName.toLowerCase(), folder.id);
-      if (folder.displayName.toLowerCase() === nameOrId.toLowerCase()) {
-        return folder.id;
-      }
+  private findFolderId(nameOrId: string): string | undefined {
+    // IDs are case-sensitive; resolve them before comparing display names.
+    const byId = this.folderCache.find((folder) => folder.id === nameOrId);
+    if (byId) return byId.id;
+    const normalized = nameOrId.toLowerCase();
+    const matches = this.folderCache.filter((folder) =>
+      folder.path.toLowerCase() === normalized || folder.name.toLowerCase() === normalized);
+    if (matches.length > 1) {
+      throw new Error(`Outlook folder "${nameOrId}" is ambiguous. Use the full path or folder ID from email_list_folders.`);
     }
-
-    // Nothing matched — return original value and let Graph API error naturally
-    return nameOrId;
+    return matches[0]?.id;
   }
 
   async listFolders(): Promise<Folder[]> {
     const client = this.ensureClient();
-    const response = await client.api('/me/mailFolders').get();
-    return (response.value || []).map(mapGraphFolder);
+    const folders: Folder[] = [];
+    const visited = new Set<string>();
+    const pending = [{ endpoint: '/me/mailFolders', parentPath: '' }];
+    // /me/mailFolders contains only roots. Every level has its own pagination.
+    for (let i = 0; i < pending.length; i++) {
+      const { endpoint, parentPath } = pending[i];
+      let next: string | undefined = endpoint;
+      do {
+        const response = await client.api(next).get();
+        for (const graphFolder of response.value || []) {
+          if (visited.has(graphFolder.id)) continue;
+          visited.add(graphFolder.id);
+          const folder = mapGraphFolder(graphFolder);
+          folder.path = parentPath ? `${parentPath}/${folder.name}` : folder.name;
+          folders.push(folder);
+          if (graphFolder.childFolderCount > 0) {
+            pending.push({
+              endpoint: `/me/mailFolders/${encodeURIComponent(folder.id)}/childFolders`,
+              parentPath: folder.path,
+            });
+          }
+        }
+        next = response['@odata.nextLink'];
+      } while (next);
+    }
+    // Publish only a complete tree, so duplicate names cannot resolve to the
+    // wrong folder after a partial traversal or a failed child-page request.
+    this.folderCache = folders;
+    return folders;
   }
 
   async createFolder(name: string, parentPath?: string): Promise<Folder> {
@@ -161,6 +189,12 @@ export class OutlookAdapter implements EmailProvider {
 
   async search(query: SearchQuery): Promise<Email[]> {
     const client = this.ensureClient();
+    query = normalizeGraphSearchQuery(query);
+    const limit = query.limit ?? 10;
+    const offset = query.offset ?? 0;
+    if (!Number.isSafeInteger(limit) || limit < 1 || !Number.isSafeInteger(offset) || offset < 0) {
+      throw new Error('Outlook search limit must be a positive integer and offset must be a non-negative integer.');
+    }
     let endpoint = '/me/messages';
     if (query.folder) {
       const folderId = await this.resolveFolder(query.folder);
@@ -175,23 +209,39 @@ export class OutlookAdapter implements EmailProvider {
       request = request.select('id,conversationId,parentFolderId,from,toRecipients,ccRecipients,bccRecipients,subject,receivedDateTime,bodyPreview,hasAttachments,isRead,importance,flag,isDraft,categories');
     }
 
-    if (filter) {
-      request = request.filter(filter);
-    }
     if (search) {
-      request = request.search(search);
-    }
-    if (query.limit) {
-      request = request.top(query.limit);
-    }
-    if (query.offset) {
-      request = request.skip(query.offset);
+      // Mail $search rejects $filter, $orderby and $skip. Keep Graph's native
+      // sent-date order and apply the exact filters and offset to matching rows.
+      request = request.search(search).top(100);
+    } else {
+      if (filter) request = request.filter(filter);
+      if (offset) request = request.skip(offset);
+      request = request.top(Math.min(limit, 1000)).orderby('receivedDateTime desc');
     }
 
-    request = request.orderby('receivedDateTime desc');
-
-    const response = await request.get();
-    return (response.value || []).map((msg: any) => mapGraphMessage(msg, this.accountId));
+    const emails: Email[] = [];
+    let matched = 0;
+    let scanned = 0;
+    do {
+      const response = await request.get();
+      const messages = response.value || [];
+      scanned += messages.length;
+      for (const message of messages) {
+        if (search && !matchesGraphSearchFilters(message, query)) continue;
+        if (search && matched++ < offset) continue;
+        emails.push(mapGraphMessage(message, this.accountId));
+        if (emails.length === limit) return emails;
+      }
+      // Graph caps keyword searches at 1,000 candidates. Never report a short
+      // or empty result as exhaustion when the service may have truncated it.
+      if (search && scanned >= 1000) {
+        throw new Error('Outlook keyword search reached the 1,000-result limit before completing this page. Narrow the subject/body or folder, or omit subject/body and search by sender and dates to retrieve older messages.');
+      }
+      if (!response['@odata.nextLink']) break;
+      // Use the entire opaque continuation URL, retaining the immutable-ID header.
+      request = client.api(response['@odata.nextLink']);
+    } while (true);
+    return emails;
   }
 
   async getEmail(id: string): Promise<Email> {

@@ -1,4 +1,4 @@
-import type { Folder, Email, Contact, AttachmentMeta, FolderTypeValue } from '../../models/types.js';
+import type { Folder, Email, Contact, AttachmentMeta, FolderTypeValue, SearchQuery } from '../../models/types.js';
 import { FolderType } from '../../models/types.js';
 
 const WELL_KNOWN_FOLDER_MAP: Record<string, FolderTypeValue> = {
@@ -124,15 +124,38 @@ export function mapGraphAttachment(attachment: any): AttachmentMeta {
   };
 }
 
-export function buildGraphFilter(query: any): { filter?: string; search?: string } {
+/** Date-only inputs mean midnight UTC; timestamps must include a timezone. */
+export function normalizeGraphSearchQuery(query: SearchQuery): SearchQuery {
+  const normalized = { ...query };
+  for (const field of ['since', 'before'] as const) {
+    const value = query[field];
+    if (value === undefined) continue;
+    const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value);
+    const timestamp = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/i.test(value);
+    const date = new Date(value);
+    if ((!dateOnly && !timestamp) || !Number.isFinite(date.getTime()) ||
+        (dateOnly && date.toISOString().slice(0, 10) !== value)) {
+      throw new Error(`Invalid Outlook search ${field}: use YYYY-MM-DD or an ISO 8601 timestamp with a timezone.`);
+    }
+    normalized[field] = date.toISOString();
+  }
+  return normalized;
+}
+
+export function buildGraphFilter(query: SearchQuery): { filter?: string; search?: string } {
   const filters: string[] = [];
   const searchParts: string[] = [];
 
+  // Graph requires the orderby property first in the filter, even when the
+  // caller only supplied a sender or a flag. Do not impose a recent-date cutoff.
+  if (query.since) filters.push(`receivedDateTime ge ${query.since}`);
+  if (query.before) filters.push(`receivedDateTime lt ${query.before}`);
+
   if (query.from) {
-    filters.push(`from/emailAddress/address eq '${query.from}'`);
+    filters.push(`from/emailAddress/address eq '${query.from.replace(/'/g, "''")}'`);
   }
   if (query.to) {
-    filters.push(`toRecipients/any(r:r/emailAddress/address eq '${query.to}')`);
+    filters.push(`toRecipients/any(r:r/emailAddress/address eq '${query.to.replace(/'/g, "''")}')`);
   }
   if (query.unreadOnly) {
     filters.push('isRead eq false');
@@ -143,11 +166,8 @@ export function buildGraphFilter(query: any): { filter?: string; search?: string
   if (query.hasAttachment) {
     filters.push('hasAttachments eq true');
   }
-  if (query.since) {
-    filters.push(`receivedDateTime ge ${query.since}`);
-  }
-  if (query.before) {
-    filters.push(`receivedDateTime lt ${query.before}`);
+  if (filters.length && !query.since && !query.before) {
+    filters.unshift('receivedDateTime ge 0001-01-01T00:00:00Z');
   }
 
   if (query.subject) {
@@ -159,6 +179,20 @@ export function buildGraphFilter(query: any): { filter?: string; search?: string
 
   return {
     filter: filters.length > 0 ? filters.join(' and ') : undefined,
-    search: searchParts.length > 0 ? `"${searchParts.join(' AND ')}"` : undefined,
+    search: searchParts.length > 0 ? JSON.stringify(searchParts.join(' AND ')) : undefined,
   };
+}
+
+/** $search cannot be combined with $filter; check structured criteria locally. */
+export function matchesGraphSearchFilters(message: any, query: SearchQuery): boolean {
+  if (query.from && message.from?.emailAddress?.address?.toLowerCase() !== query.from.toLowerCase()) return false;
+  if (query.to && !message.toRecipients?.some((recipient: any) =>
+    recipient.emailAddress?.address?.toLowerCase() === query.to!.toLowerCase())) return false;
+  if (query.unreadOnly && message.isRead !== false) return false;
+  if (query.starredOnly && message.importance !== 'high') return false;
+  if (query.hasAttachment && message.hasAttachments !== true) return false;
+  const received = Date.parse(message.receivedDateTime);
+  if (query.since && !(received >= Date.parse(query.since))) return false;
+  if (query.before && !(received < Date.parse(query.before))) return false;
+  return true;
 }

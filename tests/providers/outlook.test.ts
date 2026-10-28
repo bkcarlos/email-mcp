@@ -141,7 +141,257 @@ describe('OutlookAdapter', () => {
     });
   });
 
+  describe('nested folders', () => {
+    beforeEach(async () => {
+      await adapter.connect({
+        id: 'outlook-1', name: 'Test', provider: 'outlook', email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+      mockApiRequests.set('/me/mailFolders', createMockGraphRequest({
+        value: [{ id: 'bank/id', displayName: '银行', childFolderCount: 1 }],
+        '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/mailFolders?$skiptoken=root',
+      }));
+      mockApiRequests.set('https://graph.microsoft.com/v1.0/me/mailFolders?$skiptoken=root', createMockGraphRequest({
+        value: [{ id: 'archive', displayName: 'Archive', childFolderCount: 0 }],
+      }));
+      mockApiRequests.set('/me/mailFolders/bank%2Fid/childFolders', createMockGraphRequest({
+        value: [{ id: 'cmb', displayName: '招商银行', childFolderCount: 1, totalItemCount: 42 }],
+        '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/mailFolders/bank%2Fid/childFolders?$skiptoken=children',
+      }));
+      mockApiRequests.set('https://graph.microsoft.com/v1.0/me/mailFolders/bank%2Fid/childFolders?$skiptoken=children', createMockGraphRequest({
+        value: [{ id: 'ifast', displayName: 'ifast', childFolderCount: 0 }],
+      }));
+      mockApiRequests.set('/me/mailFolders/cmb/childFolders', createMockGraphRequest({
+        value: [{ id: 'old', displayName: '2025', childFolderCount: 0 }],
+      }));
+    });
+
+    it('lists every root and child page with full paths, including grandchildren', async () => {
+      const folders = await adapter.listFolders();
+      expect(folders.map((f) => f.path)).toEqual(['银行', 'Archive', '银行/招商银行', '银行/ifast', '银行/招商银行/2025']);
+      expect(folders.find((f) => f.id === 'cmb')?.totalCount).toBe(42);
+    });
+
+    it.each(['招商银行', '银行/招商银行', '银行/招商银行/2025'])('searches a nested folder by %s', async (folder) => {
+      const id = folder.endsWith('/2025') ? 'old' : 'cmb';
+      const messages = createMockGraphRequest({ value: [{ id: 'nested-message', parentFolderId: id }] });
+      mockApiRequests.set(`/me/mailFolders/${id}/messages`, messages);
+      const rows = await adapter.search({ folder, limit: 1 });
+      expect(messages.get).toHaveBeenCalledOnce();
+      expect(rows[0].folder).toBe(id);
+    });
+
+    it('uses folder IDs and cached paths without refetching the tree', async () => {
+      await adapter.listFolders();
+      expect(await adapter.resolveFolder('银行/IFAST')).toBe('ifast');
+      expect(await adapter.resolveFolder('cmb')).toBe('cmb');
+      expect(mockApiRequests.get('/me/mailFolders')!.get).toHaveBeenCalledOnce();
+    });
+
+    it('rejects duplicate leaf names and resolves them by path or ID', async () => {
+      mockApiRequests.set('/me/mailFolders/archive/childFolders', createMockGraphRequest({
+        value: [{ id: 'archived-cmb', displayName: '招商银行', childFolderCount: 0 }],
+      }));
+      mockApiRequests.set('https://graph.microsoft.com/v1.0/me/mailFolders?$skiptoken=root', createMockGraphRequest({
+        value: [{ id: 'archive', displayName: 'Archive', childFolderCount: 1 }],
+      }));
+      await expect(adapter.resolveFolder('招商银行')).rejects.toThrow(/ambiguous.*path.*ID/i);
+      expect(await adapter.resolveFolder('银行/招商银行')).toBe('cmb');
+      expect(await adapter.resolveFolder('Archive/招商银行')).toBe('archived-cmb');
+      expect(await adapter.resolveFolder('archived-cmb')).toBe('archived-cmb');
+    });
+
+    it('resolves long display names instead of assuming they are raw IDs', async () => {
+      const name = 'This bank folder has a display name longer than forty characters';
+      mockApiRequests.set('/me/mailFolders/cmb/childFolders', createMockGraphRequest({
+        value: [{ id: 'long-name', displayName: name, childFolderCount: 0 }],
+      }));
+      expect(await adapter.resolveFolder(`银行/招商银行/${name}`)).toBe('long-name');
+    });
+
+    it('does not cache a partial tree after a child request fails', async () => {
+      const children = mockApiRequests.get('/me/mailFolders/cmb/childFolders')!;
+      (children.get as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('temporary failure'));
+      await expect(adapter.listFolders()).rejects.toThrow('temporary failure');
+      expect(await adapter.resolveFolder('银行/招商银行/2025')).toBe('old');
+      expect(mockApiRequests.get('/me/mailFolders')!.get).toHaveBeenCalledTimes(2);
+    });
+
+    it('clears folder caches when connecting another account', async () => {
+      await adapter.listFolders();
+      await adapter.disconnect();
+      await adapter.connect({
+        id: 'outlook-2', name: 'Other', provider: 'outlook', email: 'other@outlook.com',
+        oauth: { access_token: 'other-token', refresh_token: 'rt', expiry: '' },
+      });
+      mockApiRequests.set('/me/mailFolders', createMockGraphRequest({
+        value: [{ id: 'other-cmb', displayName: '招商银行', childFolderCount: 0 }],
+      }));
+      expect(await adapter.resolveFolder('招商银行')).toBe('other-cmb');
+    });
+  });
+
   describe('search', () => {
+    beforeEach(async () => {
+      await adapter.connect({
+        id: 'outlook-1', name: 'Test', provider: 'outlook', email: 'test@outlook.com',
+        oauth: { access_token: 'token', refresh_token: 'rt', expiry: '' },
+      });
+    });
+
+    it('puts the sort property first in sender filters even without a date range', async () => {
+      await adapter.search({ from: "o'brien@example.com" });
+      expect(defaultMockRequest.filter).toHaveBeenCalledWith(
+        "receivedDateTime ge 0001-01-01T00:00:00Z and from/emailAddress/address eq 'o''brien@example.com'",
+      );
+      expect(defaultMockRequest.orderby).toHaveBeenCalledWith('receivedDateTime desc');
+    });
+
+    it('normalizes date-only bounds and puts them before other filters', async () => {
+      await adapter.search({ from: 'bank@example.com', since: '2026-10-01', before: '2026-11-01' });
+      expect(defaultMockRequest.filter).toHaveBeenCalledWith(
+        "receivedDateTime ge 2026-10-01T00:00:00.000Z and receivedDateTime lt 2026-11-01T00:00:00.000Z and from/emailAddress/address eq 'bank@example.com'",
+      );
+    });
+
+    it('does not combine keyword search with filter, orderby or skip', async () => {
+      await adapter.search({ subject: '信用卡账单', from: 'bank@example.com', offset: 5, limit: 10 });
+      expect(defaultMockRequest.search).toHaveBeenCalled();
+      expect(defaultMockRequest.filter).not.toHaveBeenCalled();
+      expect(defaultMockRequest.orderby).not.toHaveBeenCalled();
+      expect(defaultMockRequest.skip).not.toHaveBeenCalled();
+    });
+
+    it('filters keyword matches before applying offset and follows the opaque nextLink', async () => {
+      const message = (id: string, from: string) => ({ id, from: { emailAddress: { address: from } } });
+      const nextLink = 'https://graph.microsoft.com/v1.0/me/messages?$skiptoken=opaque';
+      defaultMockRequest.get = vi.fn().mockResolvedValue({
+        value: [message('unrelated', 'other@example.com'), message('first', 'bank@example.com')],
+        '@odata.nextLink': nextLink,
+      });
+      const next = createMockGraphRequest({ value: [message('second', 'BANK@example.com')] });
+      mockApiRequests.set(nextLink, next);
+
+      const results = await adapter.search({ subject: '账单', from: 'bank@example.com', offset: 1, limit: 1 });
+      expect(results.map((email) => email.id)).toEqual(['second']);
+      expect(next.get).toHaveBeenCalledOnce();
+      expect(next.header).toHaveBeenCalledWith('Prefer', 'IdType="ImmutableId"');
+      expect(next.skip).not.toHaveBeenCalled();
+    });
+
+    it('honors every structured criterion on keyword results, including exclusive before', async () => {
+      const match = {
+        id: 'match', from: { emailAddress: { address: 'bank@example.com' } },
+        toRecipients: [{ emailAddress: { address: 'ME@example.com' } }],
+        isRead: false, importance: 'high', hasAttachments: true,
+        receivedDateTime: '2026-10-01T00:00:00Z',
+      };
+      defaultMockRequest.get = vi.fn().mockResolvedValue({ value: [
+        { ...match, id: 'other-sender', from: { emailAddress: { address: 'other@example.com' } } },
+        { ...match, id: 'other-recipient', toRecipients: [{ emailAddress: { address: 'other@example.com' } }] },
+        { ...match, id: 'read', isRead: true },
+        { ...match, id: 'normal', importance: 'normal' },
+        { ...match, id: 'no-attachment', hasAttachments: false },
+        { ...match, id: 'too-old', receivedDateTime: '2026-09-30T23:59:59Z' },
+        { ...match, id: 'too-new', receivedDateTime: '2026-11-01T00:00:00Z' },
+        { ...match, id: 'missing-date', receivedDateTime: undefined },
+        match,
+      ] });
+      const results = await adapter.search({
+        subject: '信用卡账单', body: '2689', from: 'BANK@example.com', to: 'me@example.com',
+        unreadOnly: true, starredOnly: true, hasAttachment: true,
+        since: '2026-10-01', before: '2026-11-01',
+      });
+      expect(results.map((email) => email.id)).toEqual(['match']);
+    });
+
+    it('does not treat false boolean flags as negative filters', async () => {
+      defaultMockRequest.get = vi.fn().mockResolvedValue({ value: [
+        { id: 'read', isRead: true, importance: 'high', hasAttachments: true },
+        { id: 'unread', isRead: false, importance: 'normal', hasAttachments: false },
+      ] });
+      const results = await adapter.search({ body: '账单', unreadOnly: false, starredOnly: false, hasAttachment: false });
+      expect(results.map((email) => email.id)).toEqual(['read', 'unread']);
+    });
+
+    it('retains native keyword ordering and stops once the requested page is complete', async () => {
+      defaultMockRequest.get = vi.fn().mockResolvedValue({
+        value: [{ id: 'first' }, { id: 'second' }, { id: 'third' }],
+        '@odata.nextLink': 'https://graph.microsoft.com/v1.0/me/messages?$skiptoken=unused',
+      });
+      const results = await adapter.search({ body: '账单', offset: 1, limit: 1 });
+      expect(results.map((email) => email.id)).toEqual(['second']);
+      expect(defaultMockRequest.get).toHaveBeenCalledOnce();
+    });
+
+    it.each([{ offset: 1000 }, { from: 'missing@example.com' }])(
+      'reports the keyword search cap instead of a false empty page: %j', async (query) => {
+        defaultMockRequest.get = vi.fn().mockResolvedValue({
+          value: Array.from({ length: 1000 }, (_, id) => ({ id: String(id) })),
+        });
+        await expect(adapter.search({ subject: '账单', ...query })).rejects.toThrow('1,000-result limit');
+      },
+    );
+
+    it('returns a complete requested page even when keyword candidates reach the cap', async () => {
+      defaultMockRequest.get = vi.fn().mockResolvedValue({
+        value: Array.from({ length: 1000 }, (_, id) => ({ id: String(id) })),
+      });
+      expect((await adapter.search({ subject: '账单', offset: 999, limit: 1 }))[0].id).toBe('999');
+    });
+
+    it('follows short server pages for structured searches without reapplying the offset', async () => {
+      const nextLink = 'https://graph.microsoft.com/v1.0/me/messages?$skip=21';
+      defaultMockRequest.get = vi.fn().mockResolvedValue({ value: [{ id: 'first' }], '@odata.nextLink': nextLink });
+      const next = createMockGraphRequest({ value: [{ id: 'second' }] });
+      mockApiRequests.set(nextLink, next);
+      expect((await adapter.search({ from: 'bank@example.com', offset: 5, limit: 2 })).map((email) => email.id))
+        .toEqual(['first', 'second']);
+      expect(defaultMockRequest.skip).toHaveBeenCalledWith(5);
+      expect(next.skip).not.toHaveBeenCalled();
+      expect(next.filter).not.toHaveBeenCalled();
+    });
+
+    it('keeps keyword searches in their requested folder', async () => {
+      const request = createMockGraphRequest({ value: [{ id: 'inbox-match' }] });
+      mockApiRequests.set('/me/mailFolders/inbox/messages', request);
+      expect((await adapter.search({ folder: 'Inbox', subject: '账单' }))[0].id).toBe('inbox-match');
+      expect(request.search).toHaveBeenCalled();
+      expect(defaultMockRequest.get).not.toHaveBeenCalled();
+    });
+
+    it.each([false, true])('preserves returnBody=%s for keyword searches', async (returnBody) => {
+      await adapter.search({ subject: '账单', returnBody });
+      if (returnBody) expect(defaultMockRequest.select).not.toHaveBeenCalled();
+      else expect(defaultMockRequest.select).toHaveBeenCalledWith(expect.stringContaining('hasAttachments,isRead,importance'));
+    });
+
+    it('normalizes timestamp offsets without changing the instant', async () => {
+      await adapter.search({ since: '2026-10-01T00:00:00+08:00' });
+      expect(defaultMockRequest.filter).toHaveBeenCalledWith('receivedDateTime ge 2026-09-30T16:00:00.000Z');
+    });
+
+    it.each(['not-a-date', '2026-02-30', '2026-10-01T00:00:00'])('rejects invalid or ambiguous dates: %s', async (since) => {
+      await expect(adapter.search({ since })).rejects.toThrow('Invalid Outlook search since');
+      expect(defaultMockRequest.get).not.toHaveBeenCalled();
+    });
+
+    it.each([{ limit: 0 }, { limit: -1 }, { limit: 1.5 }, { offset: -1 }, { offset: 1.5 }])(
+      'rejects invalid pagination before requesting mail: %j', async (query) => {
+        await expect(adapter.search(query)).rejects.toThrow('positive integer');
+        expect(defaultMockRequest.get).not.toHaveBeenCalled();
+      },
+    );
+
+    it('propagates Graph failures without returning a partial result', async () => {
+      const nextLink = 'https://graph.microsoft.com/v1.0/me/messages?$skiptoken=failed';
+      defaultMockRequest.get = vi.fn().mockResolvedValue({ value: [{ id: 'first' }], '@odata.nextLink': nextLink });
+      const next = createMockGraphRequest();
+      next.get = vi.fn().mockRejectedValue(new Error('Access denied'));
+      mockApiRequests.set(nextLink, next);
+      await expect(adapter.search({ subject: '账单', limit: 2 })).rejects.toThrow('Access denied');
+    });
+
     it('builds OData filter from SearchQuery', async () => {
       const mockMessagesRequest = createMockGraphRequest({ value: [] });
       mockApiRequests.set('/me/messages', mockMessagesRequest);
